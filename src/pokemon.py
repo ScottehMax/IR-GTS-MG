@@ -18,14 +18,39 @@ class PokemonData:  # Singleton
         self.nature = Util.load_json("./data/natures.json")
         self.species = Util.load_json("./data/species.json")
         self.items = Util.load_json("./data/items.json")
+        self.itemsg5 = Util.load_json("./data/itemsg5.json")
         self.abilities = Util.load_json("./data/abilities.json")
         self.moves = Util.load_json("./data/moves.json")
         self.hidden_powers = Util.load_json("./data/hidden_power.json")
+        self.games = Util.load_json("./data/games.json")
         self.charmap = Gen4CharMap()
 
         self.base_stats = Util.load_json("./data/base_stats.json")
         self.level_curves = Util.load_json("./data/level_curves.json")
         self.nature_modifiers = Util.load_json("./data/nature_modifiers.json")
+
+        self.geonet4 = Util.load_json("./data/geonet4.json")
+        self.geonet5 = Util.load_json("./data/geonet5.json")
+
+    def country4(self, c_code, s_code):
+        c = self.geonet5['countries'][c_code]
+        s =  self.geonet5['states'][c][s_code]
+        return (c, s)
+
+    def country5(self, c_code, s_code):
+        c = self.geonet5['countries'][c_code]
+        s =  self.geonet5['states'][c][s_code]
+        return (c, s)
+    
+    def countrycode4(self, c_name, s_name):
+        c = self.geonet5['countries'].index(c_name)
+        s = self.geonet5['states'][c_name].index(s_name)
+        return (c, s)
+
+    def countrycode5(self, c_name, s_name):
+        c = self.geonet5['countries'].index(c_name)
+        s = self.geonet5['states'][c_name].index(s_name)
+        return (c, s)
 
 
 class Pokemon:
