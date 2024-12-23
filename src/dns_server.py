@@ -25,7 +25,7 @@ class DNSServer:
 
 
     def start(self) -> None:
-        thread = threading.Thread(target=self.start_as_thread)
+        thread = threading.Thread(target=self.start_as_thread, daemon=True)
         thread.start()
 
 
@@ -57,7 +57,10 @@ class DNSServer:
             if answer.rdtype == dns.rdatatype.A:
                 for rd in answer:
                     dns_logging.debug(f"DNS returns IP {rd.address} for {answer.name}")
-                    for domain in ["gamestats2.gs.nintendowifi.net"]: #  "dls1.ilostmymind.xyz", eventually..
+                    for domain in [
+                        "gamestats2.gs.nintendowifi.net",
+                        "syachi2ds.available.gs.nintendowifi.net",
+                    ]: #  "dls1.ilostmymind.xyz", eventually..
                         if answer.name == dns.name.from_text(domain):
                             dns_logging.debug(f"Changing IP for {answer.name} from {rd.address} to {self.proxy_ip}")
                             rd.address = self.proxy_ip

@@ -1,6 +1,8 @@
 from struct import unpack, pack
-from base64 import b64decode
-from .util import Util, Gen4CharMap
+from base64 import b64decode, urlsafe_b64decode
+import time
+from typing import Optional
+from .util import Util, Gen4CharMap, date_to_timestamp, encode_g5_string, timestamp_to_date
 from .loghandler import LogHandler
 import os, datetime
 
@@ -167,7 +169,14 @@ class Pokemon:
         self.data[0x13] = (experience >> 24) & 0xFF
 
     def get_level(self):
-        return 100 # TODO: Implement
+        exp = self.get_experience()
+        id = self.get_species_id()
+        exp_type = PokemonData().base_stats[id][0]
+        for i in range(1, 100):
+            xp_needed = PokemonData().level_curves[i][exp_type]
+            if xp_needed >= exp:
+                return i
+        return 100
 
     def get_friendship(self):
         return self.data[0x14]
@@ -616,3 +625,172 @@ class SCEncodedPokemon(Pokemon):
 class B64EncodedPokemon(SCEncodedPokemon):
     def decrypt_pokemon(self, data):
         return super().decrypt_pokemon(b64decode(data.replace('-', '+').replace('_', '/')))
+
+
+class G5Pokemon(Pokemon):
+    def __init__(self, data, decrypt=False):
+        super().__init__()
+        if data:
+            self.data = self.decrypt_pokemon(data) if decrypt else data
+            # Generate filename after data is set
+            species_id = int.from_bytes(self.data[0x08:0x0a], 'little')
+            self.filename = f"{species_id}_{int(time.time())}.pkm"
+
+    def save(self):
+        if not os.path.exists('pokemon'):
+            os.makedirs('pokemon')
+        
+        if self.data and self.filename:
+            with open(f"pokemon/{self.filename}", "wb") as f:
+                f.write(self.data)
+            pokemon_logging.info(f'Pokemon/{self.filename} saved successfully.')
+        else:
+            pokemon_logging.error('No Pokemon data to save')
+
+    @staticmethod
+    def load(file) -> Optional['G5Pokemon']:
+        if file.endswith('.pkm'):
+            with open(file, 'rb') as f:
+                data = f.read()
+
+            assert len(data) == 220, 'Invalid filesize.'
+            return G5Pokemon(data, decrypt=False)
+        pokemon_logging.error('Filename must end in .pkm')
+
+    def decrypt_pokemon(self, data):
+        return super().decrypt_pokemon(bytearray(urlsafe_b64decode(data)))
+    
+    def decrypt_bytes(self, data):
+        return super().decrypt_pokemon(data)
+    
+    def get_name(self):
+        res = self.data[0x48:0x5e].decode('utf16')
+        return res.split('\uffff')[0]
+    
+    def get_trainer_name(self):
+        res = self.data[0x68:0x78].decode('utf16')
+        return res.split('\uffff')[0]
+    
+    def get_nature(self):
+        return PokemonData().nature[self.data[0x41]]
+    
+    def get_held_item(self):
+        return PokemonData().itemsg5[self.get_held_item_id()]
+
+
+class GTSRecord(G5Pokemon):
+    def __init__(self, data: bytes, decrypt: bool = False):
+        self.full_data = data
+        
+        if decrypt:
+            self.decrypt()
+        else:
+            self.data = data
+
+        species_id = self.get_species_id()
+        self.filename = f"{species_id}_{int(time.time())}.pkm"
+
+    @staticmethod
+    def from_b64(data: str, decrypt: bool = False):
+        return GTSRecord(urlsafe_b64decode(data), decrypt)
+    
+    @staticmethod
+    def from_G5Pokemon(pokemon: G5Pokemon):
+        data = b'\x00' * 12 + pokemon.encrypt_pokemon(pokemon.data)
+        # fill out with dummy data
+        data += b'\x00' * 16
+        data += (pokemon.get_species_id()).to_bytes(2, byteorder='little')  # nat_dex_id
+        data += (pokemon.data[0x40]).to_bytes(1, byteorder='little')  # gender
+        data += (pokemon.get_level()).to_bytes(1, byteorder='little')  # level
+        data += (1).to_bytes(2, byteorder='little')  # req_nat_dex_id
+        data += (3).to_bytes(1, byteorder='little')  # req_gender
+        data += (0).to_bytes(1, byteorder='little')  # req_min_level
+        data += (0).to_bytes(1, byteorder='little')  # req_max_level
+        data += (0).to_bytes(1, byteorder='little')  # unknown_1
+        data += (pokemon.data[0x84]).to_bytes(1, byteorder='little')  # trainer_gender
+        data += (0).to_bytes(1, byteorder='little')  # unknown_2
+        data += (0).to_bytes(8, byteorder='little')  # deposited_time
+        data += (0).to_bytes(8, byteorder='little')  # exchanged_time
+        data += (0).to_bytes(4, byteorder='little')  # profile_id
+        data += (pokemon.get_trainer_id()).to_bytes(2, byteorder='little')  # tid
+        data += (pokemon.get_trainer_secret_id()).to_bytes(2, byteorder='little')  # sid
+        data += encode_g5_string("Trainer")
+        data += (218).to_bytes(1, byteorder='little')  # country
+        data += (7).to_bytes(1, byteorder='little')  # region
+        data += (1).to_bytes(1, byteorder='little')  # trainer_class
+        data += (1).to_bytes(1, byteorder='little')  # is_exchanged
+        data += (21).to_bytes(1, byteorder='little')  # version
+        data += (2).to_bytes(1, byteorder='little')  # language
+        data += (0).to_bytes(1, byteorder='little')  # unknown_3
+        data += (0).to_bytes(1, byteorder='little')  # trainer_unity_tower
+
+        return GTSRecord(data, decrypt=True)
+
+    def decrypt(self):
+        self.enc_struct = self.full_data[0x0C:0xE8]
+        self.req_nat_dex_id = int.from_bytes(self.full_data[0xFC:0xFE], byteorder='little')
+        self.req_gender = self.full_data[0xFE]
+        self.req_min_level = self.full_data[0xFF]
+        self.req_max_level = self.full_data[0x100]
+        self.unknown_1 = self.full_data[0x101]
+        self.trainer_gender = self.full_data[0x102]
+        self.unknown_2 = self.full_data[0x103]
+
+        i1 = int.from_bytes(self.full_data[0x104:0x10C], byteorder='big')
+        i2 = int.from_bytes(self.full_data[0x10C:0x114], byteorder='big')
+        try:
+            self.deposited_time = timestamp_to_date(i1)
+            self.exchanged_time = timestamp_to_date(i2)
+        except Exception as e:
+            self.deposited_time = datetime.datetime.now()
+            self.exchanged_time = datetime.datetime.now()
+
+        self.profile_id = int.from_bytes(self.full_data[0x114:0x118], byteorder='little')
+        self.tid = int.from_bytes(self.full_data[0x118:0x11A], byteorder='little')
+        self.sid = int.from_bytes(self.full_data[0x11A:0x11C], byteorder='little')
+        self.trainer_name = self.full_data[0x11C:0x12C].decode('utf-16le').split('\uffff')[0]
+        self.country, self.region = PokemonData().country5(self.full_data[0x12C], self.full_data[0x12D])
+        self.trainer_class = self.full_data[0x12E]
+        self.is_exchanged = self.full_data[0x12F]
+        self.version = self.full_data[0x130]
+        self.language = self.full_data[0x131]
+        self.unknown_3 = self.full_data[0x132]
+        self.trainer_unity_tower = self.full_data[0x133]
+        
+        self.data = bytearray(super().decrypt_bytes(self.enc_struct))
+
+    def __bytes__(self):
+        country, region = PokemonData().countrycode5(self.country, self.region)
+        if self.deposited_time is None:
+            self.deposited_time = datetime.datetime.now()
+        if self.exchanged_time is None:
+            self.exchanged_time = datetime.datetime.now()  # maybe change this later
+
+        return (
+            self.enc_struct +
+            (b'\x00' * 16) +
+            self.get_species_id().to_bytes(2, byteorder='little') +
+            self.data[0x40].to_bytes(1, byteorder='little') + # gender
+            self.get_level().to_bytes(1, byteorder='little') +
+            self.req_nat_dex_id.to_bytes(2, byteorder='little') +
+            self.req_gender.to_bytes(1, byteorder='little') +
+            self.req_min_level.to_bytes(1, byteorder='little') +
+            self.req_max_level.to_bytes(1, byteorder='little') +
+            self.unknown_1.to_bytes(1, byteorder='little') +
+            self.trainer_gender.to_bytes(1, byteorder='little') +
+            self.unknown_2.to_bytes(1, byteorder='little') +
+            date_to_timestamp(self.deposited_time).to_bytes(8, 'big') +
+            date_to_timestamp(self.exchanged_time).to_bytes(8, 'big') +
+            self.profile_id.to_bytes(4, byteorder='little') +
+            self.tid.to_bytes(2, byteorder='little') +
+            self.sid.to_bytes(2, byteorder='little') +
+            encode_g5_string(self.trainer_name) +
+            country.to_bytes(1, byteorder='little') +
+            region.to_bytes(1, byteorder='little') +
+            self.trainer_class.to_bytes(1, byteorder='little') +
+            self.is_exchanged.to_bytes(1, byteorder='little') +
+            self.version.to_bytes(1, byteorder='little') +
+            self.language.to_bytes(1, byteorder='little') +
+            self.unknown_3.to_bytes(1, byteorder='little') +
+            self.trainer_unity_tower.to_bytes(1, byteorder='little')
+        )

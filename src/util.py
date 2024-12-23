@@ -1,3 +1,4 @@
+from datetime import datetime
 import json
 import struct
 
@@ -39,5 +40,46 @@ class Gen4CharMap(Util):
         return [self.decode_character(char) for char in characters]
 
 
-        
-                    
+def timestamp_to_date(timestamp: int) -> datetime:
+    year = (timestamp >> 0x30) & 0xffff
+    month = (timestamp >> 0x28) & 0xff
+    day = (timestamp >> 0x20) & 0xff
+    hour = (timestamp >> 0x18) & 0xff
+    minute = (timestamp >> 0x10) & 0xff
+    second = (timestamp >> 0x08) & 0xff
+    return datetime(year, month, day, hour, minute, second)
+
+
+def date_to_timestamp(date: datetime) -> int:
+    return (date.year & 0xffff) << 0x30 \
+        | (date.month & 0xff) << 0x28 \
+        | (date.day & 0xff) << 0x20 \
+        | (date.hour & 0xff) << 0x18 \
+        | (date.minute & 0xff) << 0x10 \
+        | (date.second & 0xff) << 0x08
+
+
+def encode_g5_string(s: str) -> bytes:
+    """Currently only used for trainer names. Pads to 16 bytes.
+
+    Args:
+        s (str): Input string
+
+    Returns:
+        bytes: Encoded string
+    """
+    if len(s) > 7:
+        s = s[:7]
+    res = b''
+    for c in s:
+        res += c.encode('utf-16le')
+    res += b'\xff\xff'
+    if len(res) < 14:
+        res += b'\x00' * (14 - len(res) % 14)
+    if len(res) < 16:
+        res += b'\xff\xff'
+    return res
+
+
+def decode_g5_string(s: bytes):
+    return s.decode('utf-16le').split('\uffff')[0]

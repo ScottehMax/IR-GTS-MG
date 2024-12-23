@@ -1,6 +1,8 @@
+from base64 import urlsafe_b64encode
+from hashlib import sha1
 from flask import Flask, Response, request
 from flask_classful import FlaskView, route
-from .pokemon import B64EncodedPokemon, Pokemon
+from .pokemon import B64EncodedPokemon, G5Pokemon, GTSRecord, Pokemon
 from .loghandler import LogHandler
 import os, logging
 
@@ -30,6 +32,19 @@ class GTSResponse(Response):
 
         super().__init__(response, status, headers, content_type, **kwargs)
 
+
+class GTS5Response(GTSResponse):
+    SALT = b'HZEdGCzcGGLvguqUEKQN'
+    def __init__(self, response=None, status=None, headers=None, content_type=None, **kwargs):
+        if response is not None:
+            # in gen 5, the response gets a special footer
+            m = sha1()
+            m.update(self.SALT + urlsafe_b64encode(response) + self.SALT)
+            response += bytes(m.hexdigest(), encoding='utf8')
+
+        super().__init__(response, status, headers, content_type, **kwargs)
+
+
 app = Flask(__name__)
 
 @app.before_request
@@ -40,22 +55,26 @@ def handle_request():
     if len(request.args.to_dict()) == 1:
             return GTSResponse('c9KcX1Cry3QKS2Ai7yxL6QiQGeBGeQKR')
 
-class GTSServer(FlaskView):
-    route_base = '/pokemondpds/worldexchange'
+class Gen4GTSServer(FlaskView):
+    route_base = '/pokemondpds'
 
     def __init__(self):
         self.token = 'c9KcX1Cry3QKS2Ai7yxL6QiQGeBGeQKR'
 
-    @route('/info.asp', methods=['GET'])
+    @route('/worldexchange/info.asp', methods=['GET'])
     def info(self):
         gts_logging.info('Connection Established.')
         return GTSResponse(b'\x01\x00')
 
-    @route('/common/setProfile.asp', methods=['GET'])
+    @route('/worldexchange/common/setProfile.asp', methods=['GET'])
     def set_profile(self):
         return GTSResponse(b'\x00' * 8)
+    
+    @route('/common/setProfile.asp', methods=['GET'])
+    def set_profile_plat(self):
+        return GTSResponse(b'\x00' * 8)
 
-    @route('/post.asp', methods=['GET'])
+    @route('/worldexchange/post.asp', methods=['GET'])
     def post(self):
         
         gts_logging.info('Receiving Pokemon...')
@@ -64,11 +83,11 @@ class GTSServer(FlaskView):
         pokemon.dump()
         return GTSResponse(b'\x0c\x00')
 
-    @route('/search.asp', methods=['GET'])
+    @route('/worldexchange/search.asp', methods=['GET'])
     def search(self):
         return GTSResponse(b'')
 
-    @route('/result.asp', methods=['GET'])
+    @route('/worldexchange/result.asp', methods=['GET'])
     def result(self):
         
         print('Enter the path or drag the pkm file here')
@@ -96,11 +115,63 @@ class GTSServer(FlaskView):
 
         return GTSResponse(b'\x05\x00')
 
-    @route('/delete.asp', methods=['GET'])
+    @route('/worldexchange/delete.asp', methods=['GET'])
     def delete(self):
         return GTSResponse(b'\x01\x00')
 
-GTSServer.register(app)
+
+class Gen5GTSServer(FlaskView):
+    route_base = "/syachi2ds/web"
+
+    @route('/worldexchange/info.asp', methods=['GET'])
+    def info(self):
+        gts_logging.info('Connection Established.')
+        return GTS5Response(b'\x01\x00')
+    
+    @route('/common/setProfile.asp', methods=['GET'])
+    def set_profile(self):
+        return GTS5Response(b'\x00' * 8)
+    
+    @route('/worldexchange/post.asp', methods=['GET'])
+    def post(self):
+        gts_logging.info('Receiving Pokemon...')
+        try:
+            record = GTSRecord.from_b64(request.args.get('data'), decrypt=True)
+            record.save()
+        except Exception as e:
+            gts_logging.error(f"Error receiving Pokemon: {e}")
+
+        return GTS5Response(b'\x0c\x00')
+            
+    @route('/worldexchange/result.asp', methods=['GET'])
+    def result(self):
+        
+        print('Enter the path or drag the pkm file here')
+        print('Leave blank to not send a Pokémon')
+        path = input().strip()
+
+        # remove quotes if they exist
+        if path.startswith('"') and path.endswith('"'):
+            path = path[1:-1]
+
+        if path:
+            path = os.path.normpath(path).lower()
+            pokemon_data = G5Pokemon.load(path)
+            if pokemon_data is not None:
+                record = GTSRecord.from_G5Pokemon(pokemon_data)
+                return GTS5Response(bytes(record))
+
+        return GTS5Response(b'\x05\x00')
+
+
+    @route('/worldexchange/delete.asp', methods=['GET'])
+    def delete(self):
+        return GTS5Response(b'\x01\x00')
+
+
+Gen4GTSServer.register(app)
+Gen5GTSServer.register(app)
+
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=80, debug=True)
